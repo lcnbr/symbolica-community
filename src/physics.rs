@@ -33,11 +33,10 @@ pub(crate) fn initialize(m: &PyModule) -> PyResult<()> {
 
     #[cfg(feature = "spenso")]
     {
-
-    m.getattr("Expression")?
-        .setattr("to_net", wrap_pyfunction!(python_to_tensor_network, m)?)?;
-    m.add_class::<SpensoNet>()?;
-    m.add_class::<tensors::Spensor>()?;
+        m.getattr("Expression")?
+            .setattr("to_net", wrap_pyfunction!(python_to_tensor_network, m)?)?;
+        m.add_class::<SpensoNet>()?;
+        m.add_class::<tensors::Spensor>()?;
     }
 
     #[cfg(feature = "vakint")]
