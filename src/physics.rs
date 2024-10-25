@@ -9,8 +9,6 @@ use vakint::{
 #[cfg(feature = "spenso")]
 pub mod tensors;
 
-#[cfg(feature = "spenso")]
-use tensors::SpensoNet;
 
 use pyo3::{
     pyfunction,
@@ -25,22 +23,13 @@ fn python_trace(a: PythonExpression) -> PythonExpression {
     trace::trace(a.expr.as_view()).into()
 }
 
-#[cfg(feature = "spenso")]
-#[pyfunction(name = "to_net")]
-pub fn python_to_tensor_network(a: PythonExpression) -> anyhow::Result<SpensoNet> {
-    SpensoNet::from_expression(a)
-}
-
 pub(crate) fn initialize(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.getattr("Expression")?
         .setattr("trace", wrap_pyfunction!(python_trace, m)?)?;
 
     #[cfg(feature = "spenso")]
     {
-        m.getattr("Expression")?
-            .setattr("to_net", wrap_pyfunction!(python_to_tensor_network, m)?)?;
-        m.add_class::<SpensoNet>()?;
-        m.add_class::<tensors::Spensor>()?;
+        tensors::initialize_spenso(m)?;
     }
 
     #[cfg(feature = "vakint")]

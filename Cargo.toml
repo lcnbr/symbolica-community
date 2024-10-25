@@ -24,6 +24,10 @@ lto = true
 inherits = "dev"
 opt-level = 3
 
+[[bin]]
+name = "stub_gen"
+doc = false
+
 [lib]
 name = "symbolica_community"
 crate-type = ["lib", "cdylib"]
@@ -37,3 +41,9 @@ vakint = { git = "https://github.com/alphal00p/vakint", branch = "main", optiona
 spenso = { git = "https://github.com/alphal00p/spenso", branch = "master", optional = true, features = [
     "shadowing",
 ] }
+itertools = "0.13.0"
+delegate = "0.13.1"
+auto_enums = "0.8.6"
+thiserror = "1.0.65"
+pyo3-stub-gen = "0.6.0"
+env_logger = "0.11.5"

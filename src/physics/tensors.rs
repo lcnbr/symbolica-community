@@ -1,146 +1,449 @@
 use std::collections::HashMap;
 
 use anyhow::anyhow;
+use itertools::Itertools;
+use network::SpensoNet;
 use pyo3::{
-    exceptions::{self, PyIndexError, PyRuntimeError, PyTypeError},
+    conversion::FromPyObject,
+    exceptions::{self, PyIndexError, PyOverflowError, PyRuntimeError, PyTypeError},
     prelude::*,
-    types::PyComplex,
+    pybacked::PyBackedStr,
+    types::{PyComplex, PyFloat, PySlice, PyTuple, PyType},
+    wrap_pymodule, PyClass,
 };
 
 use spenso::{
     complex::{RealOrComplex, RealOrComplexTensor},
-    data::{DataTensor, GetTensorData, SetTensorData,SparseOrDense},
+    data::{DataTensor, DenseTensor, GetTensorData, SetTensorData, SparseOrDense, SparseTensor},
     network::TensorNetwork,
     parametric::{
         CompiledEvalTensor, ConcreteOrParam, LinearizedEvalTensor, MixedTensor, ParamOrConcrete,
+        ParamTensor,
     },
-    structure::{AtomStructure, HasStructure, TensorStructure},
-    symbolica_utils::SerializableAtom,
+    shadowing::{ExplicitKey, ExplicitTensorMap, EXPLICIT_TENSOR_MAP},
+    structure::{
+        abstract_index::AbstractIndex,
+        dimension::Dimension,
+        representation::{ExtendibleReps, Rep, RepName, Representation},
+        slot::{IsAbstractSlot, Slot},
+        AtomStructure, HasName, HasStructure, IndexLess, IndexlessNamedStructure, TensorStructure,
+        ToSymbolic,
+    },
+    symbolica_utils::{SerializableAtom, SerializableSymbol},
 };
+use structure::{PossiblyIndexed, SpensoIndices, SpensoRepresentation, SpensoSlot, SpensoStucture};
 use symbolica::{
     api::python::PythonExpression,
-    atom::Atom,
+    atom::{Atom, AtomView},
     domains::float::Complex,
     evaluate::{CompileOptions, FunctionMap, InlineASM, OptimizationSettings},
     poly::Variable,
 };
 
-#[pyclass(name = "TensorNetwork", module = "symbolica", subclass)]
-#[derive(Clone)]
-pub struct SpensoNet {
-    pub network: TensorNetwork<MixedTensor<f64, AtomStructure>, Atom>,
+use pyo3_stub_gen::{define_stub_info_gatherer, derive::*};
+
+pub mod network;
+pub mod structure;
+
+trait ModuleInit: PyClass {
+    fn init(m: &Bound<'_, PyModule>) -> PyResult<()> {
+        m.add_class::<Self>()
+    }
+
+    fn append_to_symbolica(_m: &Bound<'_, PyModule>) -> PyResult<()> {
+        Ok(())
+    }
 }
 
-#[pyclass(name = "Tensor", module = "symbolica", subclass)]
+pub(crate) fn initialize_spenso(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    let child_module = PyModule::new_bound(m.py(), "tensors")?;
+
+    SpensoNet::init(&child_module)?;
+    SpensoNet::append_to_symbolica(m)?;
+    Spensor::init(&child_module)?;
+    Spensor::append_to_symbolica(m)?;
+    SpensoIndices::init(&child_module)?;
+    SpensoIndices::append_to_symbolica(m)?;
+    m.add_submodule(&child_module)?;
+
+    m.py()
+        .import_bound("sys")?
+        .getattr("modules")?
+        .set_item("symbolica_community.tensors", child_module)
+}
+
+/// A tensor class that can be either dense or sparse.
+/// The data is either float or complex or a symbolica expression
+/// It can be instantiated with data using the `sparse_empty` or `dense` module functions.
+#[gen_stub_pyclass(module = "symbolica_community.tensors")]
+#[pyclass(name = "Tensor", module = "symbolica_community.tensors")]
 #[derive(Clone)]
 pub struct Spensor {
-    pub tensor: MixedTensor<f64, AtomStructure>,
+    tensor: MixedTensor<f64, PossiblyIndexed>,
 }
 
-impl From<DataTensor<f64, AtomStructure>> for Spensor {
-    fn from(value: DataTensor<f64, AtomStructure>) -> Self {
-        Self {
+impl ModuleInit for Spensor {
+    fn init(m: &Bound<'_, PyModule>) -> PyResult<()> {
+        m.add_class::<Self>()?;
+        m.add_function(wrap_pyfunction!(sparse_empty, m)?)?;
+        m.add_function(wrap_pyfunction!(dense, m)?)
+    }
+}
+
+/// Create a new sparse empty tensor with the given structure and type.
+/// The structure can be a list of integers, a list of representations, or a list of slots.
+/// In the first two cases, no "indices" are assumed, and thus the tensor is indexless (i.e.) it has a shape but no proper way to contract it.
+/// The structure can also be a proper `TensorIndices` object or `TensorStructure` object.
+///
+/// The type is either a float or a symbolica expression.
+///
+#[gen_stub_pyfunction(module = "symbolica_community.tensors")]
+#[pyfunction]
+pub fn sparse_empty(
+    structure: Bound<'_, PyAny>,
+    type_info: Bound<'_, PyType>,
+) -> PyResult<Spensor> {
+    let structure = PossiblyIndexed::extract_bound(&structure)?;
+
+    if type_info.is_subclass_of::<PyFloat>()? {
+        Ok(Spensor {
+            tensor: SparseTensor::<f64, _>::empty(structure).into(),
+        })
+    } else if type_info.is_subclass_of::<PythonExpression>()? {
+        Ok(Spensor {
+            tensor: ParamOrConcrete::Param(ParamTensor::from(SparseTensor::<Atom, _>::empty(
+                structure,
+            ))),
+        })
+    } else {
+        Err(PyTypeError::new_err("Only float type supported"))
+    }
+}
+
+/// Create a new dense tensor with the given structure and data.
+/// The structure can be a list of integers, a list of representations, or a list of slots.
+/// In the first two cases, no "indices" are assumed, and thus the tensor is indexless (i.e.) it has a shape but no proper way to contract it.
+/// The structure can also be a proper `TensorIndices` object or `TensorStructure` object.
+///
+/// The data is either a list of floats or a list of symbolica expressions, of length equal to the number of elements in the structure, in row-major order.
+#[gen_stub_pyfunction(module = "symbolica_community.tensors")]
+#[pyfunction]
+pub fn dense(structure: Bound<'_, PyAny>, data: Bound<'_, PyAny>) -> PyResult<Spensor> {
+    let structure = PossiblyIndexed::extract_bound(&structure)?;
+
+    if let Ok(d) = data.extract::<Vec<f64>>() {
+        Ok(Spensor {
+            tensor: DenseTensor::<f64, _>::from_data(d, structure)
+                .map_err(|e| PyOverflowError::new_err(e.to_string()))?
+                .into(),
+        })
+    } else if let Ok(d) = data.extract::<Vec<PythonExpression>>() {
+        let data = d.into_iter().map(|e| e.expr).collect();
+        Ok(Spensor {
+            tensor: ParamOrConcrete::Param(ParamTensor::from(
+                DenseTensor::<Atom, _>::from_data(data, structure)
+                    .map_err(|e| PyOverflowError::new_err(e.to_string()))?,
+            )),
+        })
+    } else {
+        Err(PyTypeError::new_err("Only float type supported"))
+    }
+}
+
+#[derive(FromPyObject)]
+pub enum SliceOrIntOrExpanded<'a> {
+    Slice(Bound<'a, PySlice>),
+    Int(usize),
+    Expanded(Vec<usize>),
+}
+
+pub enum TensorElements {
+    Real(Py<PyFloat>),
+    Complex(Py<PyComplex>),
+    Symbolica(PythonExpression),
+}
+
+impl IntoPy<PyObject> for TensorElements {
+    fn into_py(self, py: Python<'_>) -> PyObject {
+        match self {
+            TensorElements::Real(f) => f.into_py(py).into(),
+            TensorElements::Complex(c) => c.into_py(py).into(),
+            TensorElements::Symbolica(s) => s.into_py(py).into(),
+        }
+    }
+}
+
+impl From<ConcreteOrParam<RealOrComplex<f64>>> for TensorElements {
+    fn from(value: ConcreteOrParam<RealOrComplex<f64>>) -> Self {
+        match value {
+            ConcreteOrParam::Concrete(RealOrComplex::Real(f)) => {
+                TensorElements::Real(Python::with_gil(|py| {
+                    PyFloat::new_bound(py, f).as_unbound().to_owned()
+                }))
+            }
+            ConcreteOrParam::Concrete(RealOrComplex::Complex(c)) => {
+                TensorElements::Complex(Python::with_gil(|py| {
+                    PyComplex::from_doubles_bound(py, c.re, c.im)
+                        .as_unbound()
+                        .to_owned()
+                }))
+            }
+            ConcreteOrParam::Param(p) => TensorElements::Symbolica(PythonExpression::from(p)),
+        }
+    }
+}
+
+// #[gen_stub_pymethods]
+#[pymethods]
+impl Spensor {
+    pub fn structure<'py>(&'py self) -> Py<PyAny> {
+        match self.tensor.structure() {
+            PossiblyIndexed::Indexed(a) => Python::with_gil(|py| a.clone().into_py(py)),
+            PossiblyIndexed::Unindexed(a) => Python::with_gil(|py| a.clone().into_py(py)),
+        }
+    }
+
+    pub fn register(&self) -> PyResult<()> {
+        EXPLICIT_TENSOR_MAP.write().unwrap().insert_explicit(
+            self.tensor
+                .clone()
+                .map_structure_fallible(ExplicitKey::try_from)
+                .map_err(|s| PyTypeError::new_err(s.to_string()))?,
+        );
+        Ok(())
+    }
+
+    fn to_dense(&mut self) {
+        self.tensor = self.tensor.clone().to_dense();
+    }
+
+    fn to_sparse(&mut self) {
+        self.tensor = self.tensor.clone().to_sparse();
+    }
+
+    fn __repr__(&self) -> String {
+        format!("Spensor(\n{})", self.tensor)
+    }
+
+    fn __str__(&self) -> String {
+        format!("{}", self.tensor)
+    }
+
+    fn __len__(&self) -> usize {
+        self.tensor.size().unwrap()
+    }
+
+    fn __getitem__<'py>(&self, item: SliceOrIntOrExpanded) -> PyResult<Py<PyAny>> {
+        let out = match item {
+            SliceOrIntOrExpanded::Int(i) => self
+                .tensor
+                .get_owned_linear(i.into())
+                .ok_or(PyIndexError::new_err("flat index out of bounds"))?,
+            SliceOrIntOrExpanded::Expanded(idxs) => self
+                .tensor
+                .get_owned(&idxs)
+                .map_err(|s| PyIndexError::new_err(s.to_string()))?,
+            SliceOrIntOrExpanded::Slice(s) => {
+                let r = s.indices(self.tensor.size().unwrap() as isize)?;
+
+                let start = if r.start < 0 {
+                    (r.slicelength as isize + r.start) as usize
+                } else {
+                    r.start as usize
+                };
+
+                let end = if r.stop < 0 {
+                    (r.slicelength as isize + r.stop) as usize
+                } else {
+                    r.stop as usize
+                };
+
+                let (range, step) = if r.step < 0 {
+                    (end..start, -r.step as usize)
+                } else {
+                    (start..end, r.step as usize)
+                };
+
+                let slice: Option<Vec<TensorElements>> = range
+                    .step_by(step)
+                    .map(|i| {
+                        self.tensor
+                            .get_owned_linear(i.into())
+                            .map(TensorElements::from)
+                    })
+                    .collect();
+
+                if let Some(slice) = slice {
+                    return Ok(Python::with_gil(|py| slice.into_py(py)));
+                } else {
+                    return Err(PyIndexError::new_err("slice out of bounds"));
+                }
+            }
+        };
+
+        Ok(Python::with_gil(|py| TensorElements::from(out).into_py(py)))
+    }
+
+    fn __setitem__<'py>(
+        &mut self,
+        item: Bound<'py, PyAny>,
+        value: Bound<'py, PyAny>,
+    ) -> anyhow::Result<()> {
+        let value = if let Ok(v) = value.extract::<PythonExpression>() {
+            ConcreteOrParam::Param(v.expr)
+        } else if let Ok(v) = value.extract::<f64>() {
+            ConcreteOrParam::Concrete(RealOrComplex::Real(v))
+        } else {
+            return Err(anyhow!("Value must be a PythonExpression or a float"));
+        };
+
+        if let Ok(flat_index) = item.extract::<usize>() {
+            self.tensor.set_flat(flat_index.into(), value)
+        } else if let Ok(expanded_idxs) = item.extract::<Vec<usize>>() {
+            self.tensor.set(&expanded_idxs, value)
+        } else {
+            Err(anyhow!("Index must be an integer"))
+        }
+    }
+
+    #[pyo3(signature =
+           (constants,
+           funs,
+           params,
+           iterations = 100,
+           n_cores = 4,
+           verbose = false),
+           )]
+    pub fn evaluator(
+        &self,
+        constants: HashMap<PythonExpression, PythonExpression>,
+        funs: HashMap<(Variable, String, Vec<Variable>), PythonExpression>,
+        params: Vec<PythonExpression>,
+        iterations: usize,
+        n_cores: usize,
+        verbose: bool,
+    ) -> PyResult<SpensoExpressionEvaluator> {
+        let mut fn_map = FunctionMap::new();
+
+        for (k, v) in &constants {
+            if let Ok(r) = v.expr.clone().try_into() {
+                fn_map.add_constant(k.expr.as_view(), r);
+            } else {
+                Err(exceptions::PyValueError::new_err(
+                               "Constants must be rationals. If this is not possible, pass the value as a parameter",
+                           ))?
+            }
+        }
+
+        for ((symbol, rename, args), body) in &funs {
+            let symbol = symbol
+                .to_id()
+                .ok_or(exceptions::PyValueError::new_err(format!(
+                    "Bad function name {}",
+                    symbol
+                )))?;
+            let args: Vec<_> = args
+                .iter()
+                .map(|x| {
+                    x.to_id().ok_or(exceptions::PyValueError::new_err(format!(
+                        "Bad function name {}",
+                        symbol
+                    )))
+                })
+                .collect::<Result<_, _>>()?;
+
+            fn_map
+                .add_function(symbol, rename.clone(), args, body.expr.as_view())
+                .map_err(|e| {
+                    exceptions::PyValueError::new_err(format!("Could not add function: {}", e))
+                })?;
+        }
+
+        let settings = OptimizationSettings {
+            horner_iterations: iterations,
+            n_cores,
+            verbose,
+            ..OptimizationSettings::default()
+        };
+
+        let params: Vec<_> = params.iter().map(|x| x.expr.clone()).collect();
+
+        let mut evaltensor = match &self.tensor {
+            ParamOrConcrete::Param(s) => s.eval_tree(&fn_map, &params).map_err(|e| {
+                exceptions::PyValueError::new_err(format!("Could not create evaluator: {}", e))
+            })?,
+            ParamOrConcrete::Concrete(_) => return Err(PyRuntimeError::new_err("not atom")),
+        };
+
+        evaltensor.optimize_horner_scheme(
+            settings.horner_iterations,
+            settings.n_cores,
+            settings.hot_start.clone(),
+            settings.verbose,
+        );
+
+        evaltensor.common_subexpression_elimination();
+        let linear = evaltensor.linearize(None);
+        Ok(SpensoExpressionEvaluator {
+            eval: linear.map_coeff(&|x| x.to_f64()),
+        })
+    }
+
+    fn scalar(&self) -> PyResult<PythonExpression> {
+        self.clone()
+            .tensor
+            .scalar()
+            .map(|r| PythonExpression { expr: r.into() })
+            .ok_or_else(|| PyRuntimeError::new_err("No scalar found"))
+    }
+}
+
+impl From<DataTensor<f64, AtomStructure<Rep>>> for Spensor {
+    fn from(value: DataTensor<f64, AtomStructure<Rep>>) -> Self {
+        Spensor {
+            tensor: MixedTensor::Concrete(RealOrComplexTensor::Real(
+                value.map_structure(PossiblyIndexed::from),
+            )),
+        }
+    }
+}
+
+impl From<DataTensor<f64, PossiblyIndexed>> for Spensor {
+    fn from(value: DataTensor<f64, PossiblyIndexed>) -> Self {
+        Spensor {
             tensor: MixedTensor::Concrete(RealOrComplexTensor::Real(value)),
         }
     }
 }
 
-impl From<DataTensor<Complex<f64>, AtomStructure>> for Spensor {
-    fn from(value: DataTensor<Complex<f64>, AtomStructure>) -> Self {
-        Self {
+impl From<DataTensor<Complex<f64>, AtomStructure<Rep>>> for Spensor {
+    fn from(value: DataTensor<Complex<f64>, AtomStructure<Rep>>) -> Self {
+        Spensor {
+            tensor: MixedTensor::Concrete(RealOrComplexTensor::Complex(
+                value
+                    .map_structure(PossiblyIndexed::from)
+                    .map_data(|c| c.into()),
+            )),
+        }
+    }
+}
+
+impl From<DataTensor<Complex<f64>, PossiblyIndexed>> for Spensor {
+    fn from(value: DataTensor<Complex<f64>, PossiblyIndexed>) -> Self {
+        Spensor {
             tensor: MixedTensor::Concrete(RealOrComplexTensor::Complex(
                 value.map_data(|c| c.into()),
             )),
         }
     }
 }
-
-/// An optimized evaluator for expressions.
-#[pyclass(name = "TensorEvaluator", module = "symbolica")]
+/// An optimized evaluator for tensors.
+///
+#[gen_stub_pyclass(module = "symbolica_community.tensors")]
+#[pyclass(name = "TensorEvaluator", module = "symbolica_community.tensors")]
 #[derive(Clone)]
 pub struct SpensoExpressionEvaluator {
-    pub eval: LinearizedEvalTensor<f64, AtomStructure>,
-}
-
-/// A compiled and optimized evaluator for expressions.
-#[pyclass(name = "CompiledEvaluator", module = "symbolica")]
-#[derive(Clone)]
-pub struct SpensoCompiledExpressionEvaluator {
-    pub eval: CompiledEvalTensor<AtomStructure>,
-}
-
-#[pymethods]
-impl SpensoCompiledExpressionEvaluator {
-    // /// Load a compiled library, previously generated with `compile`.
-    // #[classmethod]
-    // fn load(
-    //     _cls: &PyType,
-    //     filename: &str,
-    //     function_name: &str,
-    //     input_len: usize,
-    //     output_len: usize,
-    // ) -> PyResult<Self> {
-    //     Ok(Self {
-    //         eval: CompiledEvalTensor::load(filename, function_name)
-    //             .map_err(|e| exceptions::PyValueError::new_err(format!("Load error: {}", e)))?,
-    //         input_len,
-    //         output_len,
-    //     })
-    // }
-
-    // /// Evaluate the expression for multiple inputs that are flattened and return the flattened result.
-    // /// This method has less overhead than `evaluate`.
-    // fn evaluate_flat(&mut self, inputs: Vec<f64>) -> Vec<f64> {
-    //     let n_inputs = inputs.len() / self.input_len;
-    //     let mut res = vec![0.; self.output_len * n_inputs];
-    //     for (r, s) in res
-    //         .chunks_mut(self.output_len)
-    //         .zip(inputs.chunks(self.input_len))
-    //     {
-    //         self.eval.evaluate(s, r);
-    //     }
-
-    //     res
-    // }
-
-    // /// Evaluate the expression for multiple inputs that are flattened and return the flattened result.
-    // /// This method has less overhead than `evaluate_complex`.
-    // fn evaluate_complex_flat<'py>(
-    //     &mut self,
-    //     py: Python<'py>,
-    //     inputs: Vec<Complex<f64>>,
-    // ) -> Vec<&'py PyComplex> {
-    //     let n_inputs = inputs.len() / self.input_len;
-    //     let mut res = vec![PyComplex::from_doubles(py, 0., 0.); self.output_len * n_inputs];
-    //     let mut tmp = vec![Complex::new_zero(); self.output_len];
-    //     for (r, s) in res
-    //         .chunks_mut(self.output_len)
-    //         .zip(inputs.chunks(self.input_len))
-    //     {
-    //         self.eval.evaluate(s, &mut tmp);
-    //         for (rr, t) in r.iter_mut().zip(&tmp) {
-    //             *rr = PyComplex::from_doubles(py, t.re, t.im);
-    //         }
-    //     }
-
-    //     res
-    // }
-
-    /// Evaluate the expression for multiple inputs and return the results.
-    fn evaluate(&mut self, inputs: Vec<Vec<f64>>) -> Vec<Spensor> {
-        inputs
-            .iter()
-            .map(|s| self.eval.evaluate(s).into())
-            .collect()
-    }
-
-    /// Evaluate the expression for multiple inputs and return the results.
-    fn evaluate_complex(&mut self, inputs: Vec<Vec<Complex<f64>>>) -> Vec<Spensor> {
-        inputs
-            .iter()
-            .map(|s| self.eval.evaluate(s).into())
-            .collect()
-    }
+    pub eval: LinearizedEvalTensor<f64, PossiblyIndexed>,
 }
 
 #[pymethods]
@@ -213,193 +516,35 @@ impl SpensoExpressionEvaluator {
     }
 }
 
+/// A compiled and optimized evaluator for tensors.
+///
+#[gen_stub_pyclass(module = "symbolica_community.tensors")]
+#[pyclass(
+    name = "CompiledTensorEvaluator",
+    module = "symbolica_community.tensors"
+)]
+#[derive(Clone)]
+pub struct SpensoCompiledExpressionEvaluator {
+    pub eval: CompiledEvalTensor<PossiblyIndexed>,
+}
+
 #[pymethods]
-impl Spensor {
-    #[pyo3(signature =
-           (constants,
-           functions,
-           params,
-           iterations = 100,
-           n_cores = 4,
-           verbose = false),
-           )]
-    pub fn evaluator(
-        &self,
-        constants: HashMap<PythonExpression, PythonExpression>,
-        functions: HashMap<(Variable, String, Vec<Variable>), PythonExpression>,
-        params: Vec<PythonExpression>,
-        iterations: usize,
-        n_cores: usize,
-        verbose: bool,
-    ) -> PyResult<SpensoExpressionEvaluator> {
-        let mut fn_map = FunctionMap::new();
-
-        for (k, v) in &constants {
-            if let Ok(r) = v.expr.clone().try_into() {
-                fn_map.add_constant(k.expr.as_view(), r);
-            } else {
-                Err(exceptions::PyValueError::new_err(
-                               "Constants must be rationals. If this is not possible, pass the value as a parameter",
-                           ))?
-            }
-        }
-
-        for ((symbol, rename, args), body) in &functions {
-            let symbol = symbol
-                .to_id()
-                .ok_or(exceptions::PyValueError::new_err(format!(
-                    "Bad function name {}",
-                    symbol
-                )))?;
-            let args: Vec<_> = args
-                .iter()
-                .map(|x| {
-                    x.to_id().ok_or(exceptions::PyValueError::new_err(format!(
-                        "Bad function name {}",
-                        symbol
-                    )))
-                })
-                .collect::<Result<_, _>>()?;
-
-            fn_map
-                .add_function(symbol, rename.clone(), args, body.expr.as_view())
-                .map_err(|e| {
-                    exceptions::PyValueError::new_err(format!("Could not add function: {}", e))
-                })?;
-        }
-
-        let settings = OptimizationSettings {
-            horner_iterations: iterations,
-            n_cores,
-            verbose,
-            ..OptimizationSettings::default()
-        };
-
-        let params: Vec<_> = params.iter().map(|x| x.expr.clone()).collect();
-
-        // let eval = self
-        //     .expr
-        //     .evaluator(&fn_map, &params, settings)
-        //     .map_err(|e| {
-        //         exceptions::PyValueError::new_err(format!("Could not create evaluator: {}", e))
-        //     })?;
-
-        let mut evaltensor = match &self.tensor {
-            ParamOrConcrete::Param(s) => s.eval_tree(&fn_map, &params).map_err(|e| {
-                exceptions::PyValueError::new_err(format!("Could not create evaluator: {}", e))
-            })?,
-            ParamOrConcrete::Concrete(_) => return Err(PyRuntimeError::new_err("not atom")),
-        };
-
-        evaltensor.optimize_horner_scheme(
-            settings.horner_iterations,
-            settings.n_cores,
-            settings.hot_start.clone(),
-            settings.verbose,
-        );
-
-        evaltensor.common_subexpression_elimination();
-        let linear = evaltensor.linearize(None);
-        Ok(SpensoExpressionEvaluator {
-            eval: linear.map_coeff(&|x| x.to_f64()),
-        })
+impl SpensoCompiledExpressionEvaluator {
+    /// Evaluate the expression for multiple inputs and return the results.
+    fn evaluate(&mut self, inputs: Vec<Vec<f64>>) -> Vec<Spensor> {
+        inputs
+            .iter()
+            .map(|s| self.eval.evaluate(s).into())
+            .collect()
     }
 
-    fn scalar(&self) -> PyResult<PythonExpression> {
-        self.tensor
-            .clone()
-            .scalar()
-            .map(|r| PythonExpression { expr: r.into() })
-            .ok_or_else(|| PyRuntimeError::new_err("No scalar found"))
-    }
-
-
-    fn to_dense(&mut self){
-        self.tensor = self.tensor.clone().to_dense();
-        // self.tensor =
-        // self.tensor.to_dense();
-    }
-
-    fn __repr__(&self) -> String {
-        format!("{:?}", self.tensor)
-    }
-
-    fn __str__(&self) -> String {
-        format!("{}", self.tensor)
-    }
-
-    fn __len__(&self) -> usize {
-        self.tensor.size().unwrap()
-    }
-
-    fn __getitem__(&self, item: &PyAny) -> PyResult<Py<PyAny>> {
-        let out = if let Ok(flat_index) = item.extract::<usize>() {
-            self.tensor
-                .get_owned_linear(flat_index.into())
-                .ok_or(PyIndexError::new_err("flat index out of bounds"))?
-        } else if let Ok(expanded_idxs) = item.extract::<Vec<usize>>() {
-            self.tensor
-                .get_owned(&expanded_idxs)
-                .map_err(|s| PyIndexError::new_err(s.to_string()))?
-        } else {
-            return Err(PyTypeError::new_err("Index must be an integer"));
-        };
-
-        match out {
-            ConcreteOrParam::Concrete(c) => match c {
-                RealOrComplex::Complex(c) => Ok(Python::with_gil(|py| {
-                    PyComplex::from_doubles(py, c.re, c.im).to_object(py)
-                })),
-                RealOrComplex::Real(r) => Ok(Python::with_gil(|py| r.into_py(py))),
-            },
-            ConcreteOrParam::Param(p) => Ok(Python::with_gil(|py| {
-                PythonExpression { expr: p }.into_py(py)
-            })),
-        }
-    }
-
-    fn __setitem__(&mut self, item: &PyAny, value: &PyAny) -> anyhow::Result<()> {
-        let value = if let Ok(v) = value.extract::<PythonExpression>() {
-            ConcreteOrParam::Param(v.expr)
-        } else if let Ok(v) = value.extract::<f64>() {
-            ConcreteOrParam::Concrete(RealOrComplex::Real(v))
-        } else {
-            return Err(anyhow!("Value must be a PythonExpression or a float"));
-        };
-
-        if let Ok(flat_index) = item.extract::<usize>() {
-            self.tensor.set_flat(flat_index.into(), value)
-        } else if let Ok(expanded_idxs) = item.extract::<Vec<usize>>() {
-            self.tensor.set(&expanded_idxs, value)
-        } else {
-            Err(anyhow!("Index must be an integer"))
-        }
+    /// Evaluate the expression for multiple inputs and return the results.
+    fn evaluate_complex(&mut self, inputs: Vec<Vec<Complex<f64>>>) -> Vec<Spensor> {
+        inputs
+            .iter()
+            .map(|s| self.eval.evaluate(s).into())
+            .collect()
     }
 }
 
-pub type ParsingNet = TensorNetwork<MixedTensor<f64, AtomStructure>, SerializableAtom>;
-
-#[pymethods]
-impl SpensoNet {
-    #[new]
-    pub fn from_expression(a: PythonExpression) -> anyhow::Result<SpensoNet> {
-        Ok(SpensoNet {
-            network: ParsingNet::try_from(a.expr.as_view())?.map_scalar(|r| r.0),
-        })
-    }
-
-    fn contract(&mut self) -> PyResult<()> {
-        self.network.contract();
-        Ok(())
-    }
-
-
-    fn result(&self) -> PyResult<Spensor> {
-        Ok(Spensor {
-            tensor: self
-                .network
-                .result_tensor_smart()
-                .map_err(|s| PyRuntimeError::new_err(s.to_string()))?,
-        })
-    }
-}
+define_stub_info_gatherer!(stub_info);

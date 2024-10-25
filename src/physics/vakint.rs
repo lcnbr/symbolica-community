@@ -18,7 +18,7 @@ fn vakint_to_python_error(vakint_error: VakintError) -> PyErr {
     exceptions::PyValueError::new_err(format!("Vakint error | {vakint_error}"))
 }
 
-#[pyclass(name = "Vakint", module = "symbolica", subclass)]
+#[pyclass(name = "Vakint", module = "symbolica",)]
 pub struct VakintWrapper {
     pub vakint: Vakint,
 }
