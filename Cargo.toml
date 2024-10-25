@@ -38,9 +38,7 @@ pyo3 = { version = "0.22.0", features = ["abi3-py37", "anyhow", "num-complex"] }
 
 anyhow = "*"
 vakint = { git = "https://github.com/alphal00p/vakint", branch = "main", optional = true }
-spenso = { git = "https://github.com/alphal00p/spenso", branch = "master", optional = true, features = [
-    "shadowing",
-] }
+spenso = { version = "0.4.0", optional = true, features = ["shadowing"] }
 itertools = "0.13.0"
 delegate = "0.13.1"
 auto_enums = "0.8.6"
