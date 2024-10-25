@@ -5,3 +5,7 @@ flake.lock
 /.venv
 /.zed
 /target
+/.vscode
+*.cpp
+*.so
+*.pyc
