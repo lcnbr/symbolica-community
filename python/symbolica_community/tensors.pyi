@@ -89,10 +89,7 @@ class Tensor(Sequence):
         r"""
         Return the structure of the tensor.
         """
-    def register(self):
-        r"""
-        Register the tensor in the tensor registry. The tensor must have at least a name.
-        """
+
     def to_dense(self):
         r"""
         Convert the internal data storage to dense.
@@ -167,7 +164,7 @@ class TensorEvaluator:
     ) -> CompiledTensorEvaluator:
         """Compile the evaluator to a shared library using C++ and optionally inline assembly and load it."""
 
-class TensorIndices:
+class TensorIndices(Sequence):
     r"""
     A structure that can be used to represent the "shape" of a tensor, along with a list of abstract indices.
     This has an optional name, and accompanying symbolica expressions that are considered as additional non-indexed arguments.
@@ -188,6 +185,29 @@ class TensorIndices:
     def to_expression(self) -> Expression:
         r"""
         Return the symbolica expression of the tensor indices.
+        """
+
+    def __len__(self) -> int:
+        r"""
+        Return the size of the tensor.
+        """
+
+    @overload
+    def __getitem__(self, idx: int) -> List[int]:
+        r"""
+        Get the indices of the slot at the given flat index.
+        """
+
+    @overload
+    def __getitem__(self, s: slice) -> Sequence[List[int]]:
+        r"""
+        Get the list of expanded indices of the slot at the given slice of flat index.
+        """
+
+    @overload
+    def __getitem__(self, key: List[int]) -> int:
+        r"""
+        Get the flattened index of the given indices.
         """
 
 class TensorNetwork:
@@ -234,7 +254,35 @@ class TensorStructure:
     def __str__(self) -> str:
         ...
 
+    def __len__(self) -> int:
+        r"""
+        Return the size of the tensor.
+        """
 
+    @overload
+    def __getitem__(self, idx: int) -> List[int]:
+        r"""
+        Get the indices of the slot at the given flat index.
+        """
+
+    @overload
+    def __getitem__(self, s: slice) -> Sequence[List[int]]:
+        r"""
+        Get the list of expanded indices of the slot at the given slice of flat index.
+        """
+
+    @overload
+    def __getitem__(self, key: List[int]) -> int:
+        r"""
+        Get the flattened index of the given indices.
+        """
+
+
+
+def register(tensor:Tensor):
+    r"""
+    Register the tensor in the tensor registry. The tensor must have at least a name.
+    """
 
 def dense(structure:List[int]|List[Slot]|List[Representation]|TensorIndices|TensorStructure,data:List[float]|List[Expression]) -> Tensor:
     r"""

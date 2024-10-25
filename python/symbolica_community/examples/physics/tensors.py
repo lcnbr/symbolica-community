@@ -44,6 +44,11 @@ gamma,p,w,mq,id = S("γ","P","W","mq","id")
 
 g_muik = TensorIndices(gamma,mu,i,k)
 
+print(g_muik)
+print(g_muik[2])
+print(g_muik[45:63:3])
+print(g_muik[[2,2,2]])
+
 # Spenso can then turn an expression that uses these slots into a tensor network
 x = g_muik.to_expression()*(p(2,nue)*gamma(nue,ke,je)+mq*id(ke,je))*w(1,ie)*w(3,mue)
 tn = TensorNetwork(x)
@@ -141,7 +146,7 @@ g = tensors.dense(TensorStructure(mink,bis,bis,name=gamma),[0,0,0,0,
 )
 print(g)
 print(g.structure())
-g.register()
+tensors.register(g)
 
 # if we now replay the parsing of the expression, the gamma matrix will be used from the registered tensor:
 tn = TensorNetwork(x)

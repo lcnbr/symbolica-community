@@ -75,7 +75,8 @@ impl ModuleInit for Spensor {
     fn init(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m.add_class::<Self>()?;
         m.add_function(wrap_pyfunction!(sparse_empty, m)?)?;
-        m.add_function(wrap_pyfunction!(dense, m)?)
+        m.add_function(wrap_pyfunction!(dense, m)?)?;
+        m.add_function(wrap_pyfunction!(register,m)?)
     }
 }
 
@@ -139,6 +140,20 @@ pub fn dense(structure: Bound<'_, PyAny>, data: Bound<'_, PyAny>) -> PyResult<Sp
     }
 }
 
+
+
+#[gen_stub_pyfunction(module = "symbolica_community.tensors")]
+#[pyfunction]
+pub fn register(tensor:Spensor)->PyResult<()>{
+    EXPLICIT_TENSOR_MAP.write().unwrap().insert_explicit(
+        tensor.tensor
+            .clone()
+            .map_structure_fallible(ExplicitKey::try_from)
+            .map_err(|s| PyTypeError::new_err(s.to_string()))?,
+    );
+    Ok(())
+}
+
 #[derive(FromPyObject)]
 pub enum SliceOrIntOrExpanded<'a> {
     Slice(Bound<'a, PySlice>),
@@ -190,16 +205,6 @@ impl Spensor {
             PossiblyIndexed::Indexed(a) => Python::with_gil(|py| a.clone().into_py(py)),
             PossiblyIndexed::Unindexed(a) => Python::with_gil(|py| a.clone().into_py(py)),
         }
-    }
-
-    pub fn register(&self) -> PyResult<()> {
-        EXPLICIT_TENSOR_MAP.write().unwrap().insert_explicit(
-            self.tensor
-                .clone()
-                .map_structure_fallible(ExplicitKey::try_from)
-                .map_err(|s| PyTypeError::new_err(s.to_string()))?,
-        );
-        Ok(())
     }
 
     #[allow(clippy::wrong_self_convention)]

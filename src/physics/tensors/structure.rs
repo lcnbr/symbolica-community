@@ -1,7 +1,7 @@
 use delegate::delegate;
 use itertools::Itertools;
 use pyo3::{
-    exceptions::{self, PyRuntimeError, PyTypeError},
+    exceptions::{self, PyIndexError, PyRuntimeError, PyTypeError},
     prelude::*,
     pybacked::PyBackedStr,
     types::PyTuple,
@@ -21,7 +21,7 @@ use spenso::{
 use symbolica::{api::python::PythonExpression, atom::AtomView, state::State};
 use thiserror::Error;
 
-use super::ModuleInit;
+use super::{ModuleInit, SliceOrIntOrExpanded};
 use auto_enums::auto_enum;
 use pyo3_stub_gen::derive::*;
 
@@ -115,6 +115,68 @@ impl SpensoIndices {
             .to_symbolic()
             .ok_or(PyRuntimeError::new_err("No name"))?
             .into())
+    }
+
+    fn __len__(&self) -> usize {
+        self.structure.size().unwrap()
+    }
+
+    fn __getitem__(&self, item: SliceOrIntOrExpanded) -> PyResult<Py<PyAny>> {
+        match item {
+            SliceOrIntOrExpanded::Int(i) => {
+                let out: Vec<_> = self
+                    .structure
+                    .expanded_index(i.into())
+                    .map_err(|s| PyIndexError::new_err(s.to_string()))?
+                    .into();
+
+                Ok(Python::with_gil(|py| out.into_py(py)))
+            }
+            SliceOrIntOrExpanded::Expanded(idxs) => {
+                let out: usize = self
+                    .structure
+                    .flat_index(&idxs)
+                    .map_err(|s| PyIndexError::new_err(s.to_string()))?
+                    .into();
+
+                Ok(Python::with_gil(|py| out.into_py(py)))
+            }
+            SliceOrIntOrExpanded::Slice(s) => {
+                let r = s.indices(self.structure.size().unwrap() as isize)?;
+
+                let start = if r.start < 0 {
+                    (r.slicelength as isize + r.start) as usize
+                } else {
+                    r.start as usize
+                };
+
+                let end = if r.stop < 0 {
+                    (r.slicelength as isize + r.stop) as usize
+                } else {
+                    r.stop as usize
+                };
+
+                let (range, step) = if r.step < 0 {
+                    (end..start, -r.step as usize)
+                } else {
+                    (start..end, r.step as usize)
+                };
+
+                let slice: Result<Vec<Vec<usize>>, _> = range
+                    .step_by(step)
+                    .map(|i| {
+                        self.structure
+                            .expanded_index(i.into())
+                            .map(Vec::<usize>::from)
+                    })
+                    .collect();
+
+                match slice {
+                    Ok(slice) => Ok(Python::with_gil(|py| slice.into_py(py))),
+                    Err(e) => Err(PyIndexError::new_err(e.to_string())),
+                }
+            }
+        }
     }
 }
 
@@ -394,6 +456,68 @@ impl SpensoStucture {
             }
             (None, None) => {
                 format!("[{}]", slot)
+            }
+        }
+    }
+
+    fn __len__(&self) -> usize {
+        self.structure.size().unwrap()
+    }
+
+    fn __getitem__(&self, item: SliceOrIntOrExpanded) -> PyResult<Py<PyAny>> {
+        match item {
+            SliceOrIntOrExpanded::Int(i) => {
+                let out: Vec<_> = self
+                    .structure
+                    .expanded_index(i.into())
+                    .map_err(|s| PyIndexError::new_err(s.to_string()))?
+                    .into();
+
+                Ok(Python::with_gil(|py| out.into_py(py)))
+            }
+            SliceOrIntOrExpanded::Expanded(idxs) => {
+                let out: usize = self
+                    .structure
+                    .flat_index(&idxs)
+                    .map_err(|s| PyIndexError::new_err(s.to_string()))?
+                    .into();
+
+                Ok(Python::with_gil(|py| out.into_py(py)))
+            }
+            SliceOrIntOrExpanded::Slice(s) => {
+                let r = s.indices(self.structure.size().unwrap() as isize)?;
+
+                let start = if r.start < 0 {
+                    (r.slicelength as isize + r.start) as usize
+                } else {
+                    r.start as usize
+                };
+
+                let end = if r.stop < 0 {
+                    (r.slicelength as isize + r.stop) as usize
+                } else {
+                    r.stop as usize
+                };
+
+                let (range, step) = if r.step < 0 {
+                    (end..start, -r.step as usize)
+                } else {
+                    (start..end, r.step as usize)
+                };
+
+                let slice: Result<Vec<Vec<usize>>, _> = range
+                    .step_by(step)
+                    .map(|i| {
+                        self.structure
+                            .expanded_index(i.into())
+                            .map(Vec::<usize>::from)
+                    })
+                    .collect();
+
+                match slice {
+                    Ok(slice) => Ok(Python::with_gil(|py| slice.into_py(py))),
+                    Err(e) => Err(PyIndexError::new_err(e.to_string())),
+                }
             }
         }
     }
