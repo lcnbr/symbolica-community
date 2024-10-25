@@ -1,36 +1,24 @@
-use std::collections::HashMap;
-
-use anyhow::anyhow;
 use delegate::delegate;
 use itertools::Itertools;
 use pyo3::{
-    exceptions::{self, PyIndexError, PyRuntimeError, PyTypeError},
+    exceptions::{self, PyRuntimeError, PyTypeError},
     prelude::*,
     pybacked::PyBackedStr,
-    types::{PyComplex, PyTuple},
+    types::PyTuple,
 };
 use spenso::{
-    complex::{RealOrComplex, RealOrComplexTensor},
-    data::{DataTensor, GetTensorData, SetTensorData, SparseOrDense, SparseTensor},
-    network::TensorNetwork,
-    parametric::{
-        CompiledEvalTensor, ConcreteOrParam, LinearizedEvalTensor, MixedTensor, ParamOrConcrete,
-    },
     shadowing::ExplicitKey,
     structure::{
         abstract_index::AbstractIndex,
         dimension::Dimension,
-        representation::{BaseRepName, Euclidean, ExtendibleReps, Rep, RepName, Representation},
+        representation::{ExtendibleReps, Rep, RepName, Representation},
         slot::{IsAbstractSlot, Slot},
-        AtomStructure, HasName, HasStructure, IndexLess, IndexlessNamedStructure, NamedStructure,
-        StructureContract, TensorStructure, ToSymbolic, VecStructure,
+        AtomStructure, HasName, IndexLess, IndexlessNamedStructure, StructureContract,
+        TensorStructure, ToSymbolic, VecStructure,
     },
     symbolica_utils::{SerializableAtom, SerializableSymbol},
 };
-use symbolica::{
-    api::python::PythonExpression,
-    atom::AtomView,
-};
+use symbolica::{api::python::PythonExpression, atom::AtomView, state::State};
 use thiserror::Error;
 
 use super::ModuleInit;
@@ -114,12 +102,19 @@ impl SpensoIndices {
             let args = self
                 .structure
                 .external_structure_iter()
-                .into_iter()
                 .map(|r| r.to_atom())
                 .join(",");
 
             format!("({})", args.trim_end())
         }
+    }
+
+    fn to_expression(&self) -> PyResult<PythonExpression> {
+        Ok(self
+            .structure
+            .to_symbolic()
+            .ok_or(PyRuntimeError::new_err("No name"))?
+            .into())
     }
 }
 
@@ -281,7 +276,7 @@ impl StructureContract for PossiblyIndexed {
                     panic!("Cannot merge indexed and unindexed structures")
                 }
             }
-            PossiblyIndexed::Unindexed(i) => {
+            PossiblyIndexed::Unindexed(_) => {
                 panic!("Cannot merge indexed and unindexed structures")
             }
         }
@@ -290,7 +285,7 @@ impl StructureContract for PossiblyIndexed {
     fn trace(&mut self, i: usize, j: usize) {
         match self {
             PossiblyIndexed::Indexed(s) => s.structure.trace(i, j),
-            PossiblyIndexed::Unindexed(s) => panic!("cannot trace unindexed"),
+            PossiblyIndexed::Unindexed(_) => panic!("cannot trace unindexed"),
         }
     }
 
@@ -430,7 +425,7 @@ pub struct SpensoRepresentation {
     pub representation: Representation<Rep>,
 }
 
-#[gen_stub_pymethods]
+// #[gen_stub_pymethods]
 #[pymethods]
 impl SpensoRepresentation {
     #[new]
@@ -471,6 +466,14 @@ impl SpensoRepresentation {
             Ok(SpensoSlot {
                 slot: self.representation.new_slot(aind),
             })
+        } else if let Ok(s) = aind.extract::<PyBackedStr>() {
+            let id = State::get_symbol(&s);
+
+            Ok(SpensoSlot {
+                slot: self
+                    .representation
+                    .new_slot(AbstractIndex::Symbol(id.into())),
+            })
         } else {
             Err(PyTypeError::new_err("aind must be an integer or a symbol"))
         }
@@ -482,6 +485,10 @@ impl SpensoRepresentation {
 
     fn __str__(&self) -> String {
         format!("{}", self.representation.to_symbolic([]))
+    }
+
+    fn to_expression(&self) -> PythonExpression {
+        PythonExpression::from(self.representation.to_symbolic([]))
     }
 }
 
@@ -497,7 +504,7 @@ pub struct SpensoSlot {
     pub slot: Slot<Rep>,
 }
 
-#[gen_stub_pymethods]
+// #[gen_stub_pymethods]
 #[pymethods]
 impl SpensoSlot {
     fn __repr__(&self) -> String {
@@ -544,8 +551,18 @@ impl SpensoSlot {
             Ok(SpensoSlot {
                 slot: rep.new_slot(aind),
             })
+        } else if let Ok(s) = aind.extract::<PyBackedStr>() {
+            let id = State::get_symbol(&s);
+
+            Ok(SpensoSlot {
+                slot: rep.new_slot(AbstractIndex::Symbol(id.into())),
+            })
         } else {
             Err(PyTypeError::new_err("aind must be an integer or a symbol"))
         }
+    }
+
+    fn to_expression(&self) -> PythonExpression {
+        PythonExpression::from(self.slot.to_atom())
     }
 }

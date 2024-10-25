@@ -40,8 +40,8 @@ class Representation:
      COLORSEXT: Rep = Rep::Dualizable(4);
      COLORANTISEXT: Rep = Rep::Dualizable(-4);
     """
-    def __new__(cls,name,dimension,dual = ...): ...
-    def __call__(self, aind:typing.Any) -> Slot:
+    def __new__(cls,name:str,dimension:int,dual:bool =False): ...
+    def __call__(self, aind:int|Expression|str) -> Slot:
         r"""
         Generate a new slot with the given index, from this representation
         """
@@ -53,6 +53,10 @@ class Representation:
     def __str__(self) -> str:
         ...
 
+    def to_expression(self) -> Expression:
+        r"""
+        Return the symbolica expression of the representation.
+        """
 
 class Slot:
     r"""
@@ -62,12 +66,17 @@ class Slot:
     The abstract index id can be either an integer or a symbol.
     This is the building block for creating tensor structures that can be contracted.
     """
-    def __new__(cls,name,dimension,aind,dual = ...): ...
+    def __new__(cls,name:str,dimension:int,aind:int|str|Expression,dual:bool =False): ...
     def __repr__(self) -> str:
         ...
 
     def __str__(self) -> str:
         ...
+
+    def to_expression(self) -> Expression:
+        r"""
+        Return the symbolica expression of the slot.
+        """
 
 
 class Tensor(Sequence):
@@ -175,6 +184,11 @@ class TensorIndices:
 
     def __str__(self) -> str:
         ...
+
+    def to_expression(self) -> Expression:
+        r"""
+        Return the symbolica expression of the tensor indices.
+        """
 
 class TensorNetwork:
     r"""

@@ -1,41 +1,25 @@
-use std::collections::HashMap;
 
-use anyhow::anyhow;
-use itertools::Itertools;
 use pyo3::{
-    exceptions::{self, PyIndexError, PyRuntimeError, PyTypeError},
+    exceptions::PyRuntimeError,
     prelude::*,
-    pybacked::PyBackedStr,
-    types::{PyComplex, PyTuple},
 };
 
 use spenso::{
-    complex::{RealOrComplex, RealOrComplexTensor},
-    data::{DataTensor, GetTensorData, SetTensorData, SparseOrDense, SparseTensor},
     network::TensorNetwork,
-    parametric::{
-        CompiledEvalTensor, ConcreteOrParam, LinearizedEvalTensor, MixedTensor, ParamOrConcrete,
-    },
+    parametric::MixedTensor,
     structure::{
-        abstract_index::AbstractIndex,
-        dimension::Dimension,
-        representation::{ExtendibleReps, Rep, RepName, Representation},
-        slot::{IsAbstractSlot, Slot},
-        AtomStructure, HasName, HasStructure, IndexLess, IndexlessNamedStructure, TensorStructure,
-        ToSymbolic,
+        representation::Rep,
+        AtomStructure,
     },
-    symbolica_utils::{SerializableAtom, SerializableSymbol},
+    symbolica_utils::SerializableAtom,
 };
 use symbolica::{
     api::python::PythonExpression,
-    atom::{Atom, AtomView},
-    domains::float::Complex,
-    evaluate::{CompileOptions, FunctionMap, InlineASM, OptimizationSettings},
-    poly::Variable,
+    atom::Atom,
 };
 
 use super::{structure::PossiblyIndexed, ModuleInit, Spensor};
-use pyo3_stub_gen::{define_stub_info_gatherer, derive::*};
+use pyo3_stub_gen::derive::*;
 
 #[gen_stub_pyclass(module = "symbolica_community.tensors")]
 #[pyclass(name = "TensorNetwork", module = "symbolica_community.tensors")]

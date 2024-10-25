@@ -1,40 +1,29 @@
 use std::collections::HashMap;
 
 use anyhow::anyhow;
-use itertools::Itertools;
 use network::SpensoNet;
 use pyo3::{
     conversion::FromPyObject,
     exceptions::{self, PyIndexError, PyOverflowError, PyRuntimeError, PyTypeError},
     prelude::*,
-    pybacked::PyBackedStr,
-    types::{PyComplex, PyFloat, PySlice, PyTuple, PyType},
-    wrap_pymodule, PyClass,
+    types::{PyComplex, PyFloat, PySlice, PyType},
+    PyClass,
 };
 
 use spenso::{
     complex::{RealOrComplex, RealOrComplexTensor},
     data::{DataTensor, DenseTensor, GetTensorData, SetTensorData, SparseOrDense, SparseTensor},
-    network::TensorNetwork,
     parametric::{
         CompiledEvalTensor, ConcreteOrParam, LinearizedEvalTensor, MixedTensor, ParamOrConcrete,
         ParamTensor,
     },
-    shadowing::{ExplicitKey, ExplicitTensorMap, EXPLICIT_TENSOR_MAP},
-    structure::{
-        abstract_index::AbstractIndex,
-        dimension::Dimension,
-        representation::{ExtendibleReps, Rep, RepName, Representation},
-        slot::{IsAbstractSlot, Slot},
-        AtomStructure, HasName, HasStructure, IndexLess, IndexlessNamedStructure, TensorStructure,
-        ToSymbolic,
-    },
-    symbolica_utils::{SerializableAtom, SerializableSymbol},
+    shadowing::{ExplicitKey, EXPLICIT_TENSOR_MAP},
+    structure::{representation::Rep, AtomStructure, HasStructure, TensorStructure},
 };
-use structure::{PossiblyIndexed, SpensoIndices, SpensoRepresentation, SpensoSlot, SpensoStucture};
+use structure::{PossiblyIndexed, SpensoIndices};
 use symbolica::{
     api::python::PythonExpression,
-    atom::{Atom, AtomView},
+    atom::Atom,
     domains::float::Complex,
     evaluate::{CompileOptions, FunctionMap, InlineASM, OptimizationSettings},
     poly::Variable,
@@ -166,9 +155,9 @@ pub enum TensorElements {
 impl IntoPy<PyObject> for TensorElements {
     fn into_py(self, py: Python<'_>) -> PyObject {
         match self {
-            TensorElements::Real(f) => f.into_py(py).into(),
-            TensorElements::Complex(c) => c.into_py(py).into(),
-            TensorElements::Symbolica(s) => s.into_py(py).into(),
+            TensorElements::Real(f) => f.into_py(py),
+            TensorElements::Complex(c) => c.into_py(py),
+            TensorElements::Symbolica(s) => s.into_py(py),
         }
     }
 }
@@ -196,7 +185,7 @@ impl From<ConcreteOrParam<RealOrComplex<f64>>> for TensorElements {
 // #[gen_stub_pymethods]
 #[pymethods]
 impl Spensor {
-    pub fn structure<'py>(&'py self) -> Py<PyAny> {
+    pub fn structure(&self) -> Py<PyAny> {
         match self.tensor.structure() {
             PossiblyIndexed::Indexed(a) => Python::with_gil(|py| a.clone().into_py(py)),
             PossiblyIndexed::Unindexed(a) => Python::with_gil(|py| a.clone().into_py(py)),
@@ -213,10 +202,12 @@ impl Spensor {
         Ok(())
     }
 
+    #[allow(clippy::wrong_self_convention)]
     fn to_dense(&mut self) {
         self.tensor = self.tensor.clone().to_dense();
     }
 
+    #[allow(clippy::wrong_self_convention)]
     fn to_sparse(&mut self) {
         self.tensor = self.tensor.clone().to_sparse();
     }
@@ -233,7 +224,7 @@ impl Spensor {
         self.tensor.size().unwrap()
     }
 
-    fn __getitem__<'py>(&self, item: SliceOrIntOrExpanded) -> PyResult<Py<PyAny>> {
+    fn __getitem__(&self, item: SliceOrIntOrExpanded) -> PyResult<Py<PyAny>> {
         let out = match item {
             SliceOrIntOrExpanded::Int(i) => self
                 .tensor
