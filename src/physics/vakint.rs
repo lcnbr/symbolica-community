@@ -18,12 +18,12 @@ fn vakint_to_python_error(vakint_error: VakintError) -> PyErr {
     exceptions::PyValueError::new_err(format!("Vakint error | {vakint_error}"))
 }
 
-#[pyclass(name = "Vakint", module = "symbolica",)]
+#[pyclass(name = "Vakint", module = "symbolica_community",subclass)]
 pub struct VakintWrapper {
     pub vakint: Vakint,
 }
 
-#[pyclass(name = "VakintNumericalResult", module = "symbolica", subclass)]
+#[pyclass(name = "VakintNumericalResult", module = "symbolica_community", subclass)]
 pub struct NumericalEvaluationResultWrapper {
     pub value: NumericalEvaluationResult,
 }
@@ -89,7 +89,7 @@ impl NumericalEvaluationResultWrapper {
     }
 }
 
-#[pyclass(name = "VakintExpression", module = "symbolica", subclass)]
+#[pyclass(name = "VakintExpression", module = "symbolica_community", subclass)]
 pub struct VakintExpressionWrapper {
     pub value: VakintExpression,
 }
@@ -126,7 +126,7 @@ impl VakintExpressionWrapper {
     }
 }
 
-#[pyclass(name = "VakintEvaluationMethod", module = "symbolica", subclass)]
+#[pyclass(name = "VakintEvaluationMethod", module = "symbolica_community", subclass)]
 pub struct VakintEvaluationMethodWrapper {
     pub method: EvaluationMethod,
 }

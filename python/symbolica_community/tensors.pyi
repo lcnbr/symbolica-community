@@ -2,9 +2,19 @@
 # ruff: noqa: E501, F401
 
 from __future__ import annotations
+
 import typing
 from enum import Enum
-from typing import Any, Callable, overload, Iterator, Optional, Sequence, Tuple, List
+from typing import (
+    Any,
+    Callable,
+    Iterator,
+    List,
+    Optional,
+    Sequence,
+    Tuple,
+    overload,
+)
 
 from python.symbolica_community.symbolica_community import Expression
 
@@ -40,7 +50,8 @@ class Representation:
      COLORSEXT: Rep = Rep::Dualizable(4);
      COLORANTISEXT: Rep = Rep::Dualizable(-4);
     """
-    def __new__(cls,name:str,dimension:int,dual:bool =False): ...
+    def __new__(cls,name:str,dimension:int,dual:bool =False)->Representation:
+        ...
     def __call__(self, aind:int|Expression|str) -> Slot:
         r"""
         Generate a new slot with the given index, from this representation
@@ -66,7 +77,8 @@ class Slot:
     The abstract index id can be either an integer or a symbol.
     This is the building block for creating tensor structures that can be contracted.
     """
-    def __new__(cls,name:str,dimension:int,aind:int|str|Expression,dual:bool =False): ...
+    def __new__(cls,name:str,dimension:int,aind:int|str|Expression,dual:bool =False)->Slot:
+        ...
     def __repr__(self) -> str:
         ...
 
@@ -90,7 +102,7 @@ class Tensor(Sequence):
         Return the structure of the tensor.
         """
 
-    def to_dense(self):
+    def to_dense(self) -> None:
         r"""
         Convert the internal data storage to dense.
         """
@@ -117,7 +129,7 @@ class Tensor(Sequence):
         Get the data stored at the given index (flattened) or indices (row-major).
         """
 
-    def __setitem__(self, key: int|List[int], value: float|Expression):
+    def __setitem__(self, key: int|List[int], value: float|Expression) -> None:
         r"""
         Set the data stored at the given index (flattened) or indices (row-major).
         """
@@ -217,13 +229,26 @@ class TensorNetwork:
     This class is a wrapper around the `TensorNetwork` class from the `spenso` crate.
     Such a network is a graph representing the arithmetic operations between tensors.
     In the most basic case, edges represent the contraction of indices.
+
+    Examples
+    --------
+
+    >>> from symbolica_community.tensors import Representation, TensorNetwork
+    >>> from symbolica_community import S
+    >>> mink = Representation("mink",4)
+    >>> bis = Representation("bis",4)
+    >>> [mu,nu,i,j,k]=[a.to_expression() for a in  [mink("mu"),mink("nu"),bis("i"),bis("j"),bis("k")]]
+    >>> gamma,p,w,mq,id = S("γ","P","W","mq","id")
+    >>> expr = gamma(mu,i,k)*(p(2,nu)*gamma(nu,k,j)+mq*id(k,j))*w(1,i)*w(3,mu)
+    >>> tn = TensorNetwork(expr)
+    >>> print(tn)
     """
     def __new__(cls,expr:Expression) -> TensorNetwork:
         r"""
         Create a new tensor network.
         """
 
-    def contract(self):
+    def contract(self) -> None:
         r"""
         Contract the tensor network.
         """

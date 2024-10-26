@@ -3,7 +3,14 @@ requires = ["maturin>=1.7,<2.0"]
 build-backend = "maturin"
 
 [project]
-authors = [{ email = "benruyl@gmail.com" }, { name = "Ben Ruijl" }]
+authors = [
+    { email = "benruyl@gmail.com" },
+    { name = "Ben Ruijl" },
+    { email = "mail@lucien.ch" },
+    { name = "Lucien Huber" },
+    { email = "valentin.hirschi@gmail.com" },
+    { name = "Valentin Hischi" },
+]
 name = "symbolica-community"
 summary = "Community-enhanced version of Symbolica: a blazing fast computer algebra system"
 description = "Community-enhanced version of Symbolica: a blazing fast computer algebra system"
